@@ -5,8 +5,8 @@ Demo for azure search
 ```
 
 > I m using azure search in order to :
->> - create indexes
->> - upload documents
->> - query documents
+> - create indexes
+> - upload documents
+> - query documents
 
 **`Tools`** : vs19, net core 3.1
