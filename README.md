@@ -6,7 +6,9 @@ Demo for azure search
 
 > I m using azure search in order to :
 > - create indexes
-> - upload documents
+> - count documents
 > - query documents
+> - upload documents
+> - delete documents
 
 **`Tools`** : vs19, net core 3.1
