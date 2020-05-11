@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Lib.Configuration;
-using Lib.Contracts;
 using Lib.Indexes;
 using Lib.Models;
 using Microsoft.Azure.Search;
@@ -13,57 +12,78 @@ namespace Lib
 {
     public class SearchClient<TSearchIndex> : ISearchClient<TSearchIndex> where TSearchIndex : ISearchIndex
     {
+        private readonly ISettings _settings;
         private readonly ISearchIndexClient _searchIndexClient;
+        private readonly SearchServiceClient _searchServiceClient;
 
         public SearchClient(ISettings settings)
         {
-            _searchIndexClient = GetOrCreateSearchIndexClient(settings);
+            _settings = settings;
+            var credentials = new SearchCredentials(settings.ApiKey);
+            _searchServiceClient = new SearchServiceClient(settings.Name, credentials);
+            _searchIndexClient = GetOrCreateSearchIndexClient();
         }
 
-        public async Task SaveAsync<TSearchModel>(ICollection<TSearchModel> models) where TSearchModel : ISearchModel
+        public Task<long> CountAsync()
+        {
+            return _searchIndexClient.Documents.CountAsync();
+        }
+
+        public Task DeleteIndexAndDocumentsAsync()
+        {
+            return _searchServiceClient.Indexes.DeleteAsync(_settings.IndexName);
+        }
+
+        public Task DeleteDocumentsAsync(string keyName, ICollection<string> keysValues)
+        {
+            var batch = IndexBatch.Delete(keyName, keysValues);
+            return RunBatchAsync(batch);
+        }
+
+        public Task SaveAsync<TSearchModel>(ICollection<TSearchModel> models) where TSearchModel : ISearchModel
         {
             var actions = models.Select(IndexAction.Upload);
             var batch = IndexBatch.New(actions);
+            return RunBatchAsync(batch);
+        }
+
+        public async Task<ICollection<TSearchModel>> GetAsync<TSearchModel>(string query, ISearchClientParameters parameters = null) where TSearchModel : ISearchModel
+        {
+            var searchParameters = parameters != null ? new SearchClientParameters(parameters) : null;
+            var searchResults = await _searchIndexClient.Documents.SearchAsync<TSearchModel>(query, searchParameters);
+            return searchResults.Results.Select(x => x.Document).ToList();
+        }
+
+        private ISearchIndexClient GetOrCreateSearchIndexClient()
+        {
+            if (_searchServiceClient.Indexes.Exists(_settings.IndexName))
+            {
+                return _searchServiceClient.Indexes.GetClient(_settings.IndexName);
+            }
+
+            var indexDefinition = new Index
+            {
+                Name = _settings.IndexName,
+                Fields = FieldBuilder.BuildForType<TSearchIndex>()
+            };
+
+            var index = _searchServiceClient.Indexes.Create(indexDefinition);
+            return _searchServiceClient.Indexes.GetClient(index.Name);
+        }
+
+        private async Task RunBatchAsync<T>(IndexBatch<T> batch)
+        {
             try
             {
                 await _searchIndexClient.Documents.IndexAsync(batch);
             }
             catch (IndexBatchException ex)
             {
-                var documents = ex
-                    .IndexingResults
+                var failedDocuments = ex.IndexingResults
                     .Where(r => !r.Succeeded)
                     .Select(r => r.Key);
-                var failedDocuments = string.Join(", ", documents);
-                Console.WriteLine($"Failed to index some documents: {failedDocuments}");
-                Console.WriteLine(ex);
+                Console.WriteLine($"Failed to index some documents: {string.Join(", ", failedDocuments)}\n{ex}");
             }
-        }
-
-        public async Task<ICollection<TSearchModel>> GetAsync<TSearchModel>(string query) where TSearchModel : ISearchModel
-        {
-            var searchResults = await _searchIndexClient.Documents.SearchAsync<TSearchModel>(query);
-            return searchResults.Results.Select(x => x.Document).ToList();
-        }
-
-        private static ISearchIndexClient GetOrCreateSearchIndexClient(ISettings settings)
-        {
-            var credentials = new SearchCredentials(settings.ApiKey);
-            var searchServiceClient = new SearchServiceClient(settings.Name, credentials);
-
-            if (searchServiceClient.Indexes.Exists(settings.IndexName))
-            {
-                return searchServiceClient.Indexes.GetClient(settings.IndexName);
-            }
-
-            var indexDefinition = new Index
-            {
-                Name = settings.IndexName,
-                Fields = FieldBuilder.BuildForType<TSearchIndex>()
-            };
-
-            var index = searchServiceClient.Indexes.Create(indexDefinition);
-            return searchServiceClient.Indexes.GetClient(index.Name);
         }
     }
 }
